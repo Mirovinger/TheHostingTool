@@ -100,6 +100,7 @@
     width: 16px;
     position: relative;
     top: 10px;
+    right: 5px;
 }
 label {
     font-weight: bold;
@@ -108,6 +109,26 @@ label {
     -webkit-filter: grayscale(100%); /* Chrome 19+, Safari 6+, MobileSafari 6+ */
     /* Firefox 10+, Firefox on Android */
     filter: url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\'><filter id=\'grayscale\'><feColorMatrix type=\'matrix\' values=\'0.3333 0.3333 0.3333 0 0 0.3333 0.3333 0.3333 0 0 0.3333 0.3333 0.3333 0 0 0 0 0 1 0\'/></filter></svg>#grayscale");
+}
+.cke_chrome {
+    display: inline-block;
+    width: 82%;
+}
+#pkgTopActions {
+    margin: 3px 0 5px 5px;
+}
+.topActions {
+    font-weight: bold;
+    margin-right: 10px;
+}
+.topActions > img {
+    vertical-align: middle;
+}
+.topActions > span {
+    vertical-align: middle;
+}
+#shrinkEditor {
+    display: none;
 }
 </style>
 <script type="text/javascript">
@@ -228,6 +249,49 @@ $(document).ready(function() {
         $(".packageDelBtn").bind("click", onPackageDeleteClick);
     };
 
+    var initEditor = function($element, defaultHtml) {
+        var arglen = arguments.length;
+        $element.ckeditor(function(textarea) {
+            var editor = this;
+            var firstCall = false;
+            if(arglen > 1) {
+                firstCall = true;
+                $(textarea).val(defaultHtml);
+            }
+            editor.on("change", function() {
+                // Even though we set the value of the textarea first the onChange event is still somehow
+                // being called afterwards for the initial data. To workaround, we need to ignore the first call.
+                if(firstCall) {
+                    firstCall = false;
+                    return;
+                }
+                onPackageFieldChanged.call(textarea);
+            });
+            editor.on("mode", function() {
+                if(this.mode == "source") {
+                    var editable = editor.editable();
+                    editable.attachListener(editable, "input", function() {
+                        onPackageFieldChanged.call($element[0]);
+                    });
+                }
+            });
+        }, {
+            toolbarGroups: [
+                { name: "document",	   groups: [ "mode", "document", "doctools" ] },
+                { name: "editing",     groups: [ "find", "selection", "spellchecker" ] },
+                { name: "basicstyles", groups: [ "basicstyles", "cleanup" ] },
+                { name: "paragraph",   groups: [ "list", "indent", "blocks", "align", "bidi" ] },
+                { name: "links" },
+                { name: "insert" },
+                { name: "colors" },
+                { name: "tools" },
+                { name: "others" },
+                { name: "about" }
+            ],
+            removeButtons: "Cut,Copy,Paste,Undo,Redo,Anchor,Underline,Strike,Subscript,Superscript"
+        });
+    };
+
     var populatePackage = function(entry, insertAfter) {
         // Get template HTML
         var html = $("#pkgHtmlTemplate").html();
@@ -244,7 +308,7 @@ $(document).ready(function() {
         $("#packageName-" + entry.id + " > a").html(entry.name);
         $("#pkg-field-name-" + entry.id).val(entry.name);
         $("#pkg-field-backend-" + entry.id).val(entry.backend);
-        $("#pkg-field-desc-" + entry.id).val(entry.description);
+        initEditor($("#pkg-field-desc-" + entry.id), entry.description);
         $("#pkg-field-type-" + entry.id).val(entry.type);
         $("#pkg-field-server-" + entry.id).val(entry.server);
         $("#pkg-field-admin-" + entry.id).prop("checked", entry.admin);
@@ -275,11 +339,23 @@ $(document).ready(function() {
         populatePackage(entry);
     });
 
+    var onSortableStart = function(event, ui) {
+        var id = ui.item.context.id.split("-")[1];
+        $("#pkg-field-desc-" + id).ckeditorGet().destroy();
+    };
+
+    var onSortableStop = function(event, ui) {
+        var id = ui.item.context.id.split("-")[1];
+        initEditor($("#pkg-field-desc-" + id));
+    };
+
     var onSortableChange = function(event, ui) {
         $("#saveOrderChangesDiv").slideDown();
     };
 
     $("#sortablePackages").sortable({
+        start: onSortableStart,
+        stop: onSortableStop,
         change: onSortableChange
     });
 
@@ -328,7 +404,7 @@ $(document).ready(function() {
             }
             stopSpin();
         });
-    }
+    };
 
     $(".packageDelBtn").bind("click", onPackageDeleteClick);
 
@@ -343,6 +419,7 @@ $(document).ready(function() {
         $("#packageIcon-new" + $newId).attr("src", iconDir + "package_green.png");
         doTooltip(".tooltip-new" + $newId, true);
         $("#savePkgBtn-new" + $newId).html("Create Package");
+        initEditor($("#pkg-field-desc-new" + $newId));
         $("#packagebox-new" + $newId).slideDown();
         rebindEvents();
     });
@@ -433,9 +510,9 @@ $(document).ready(function() {
         }
 
         $.post("<AJAX>?function=acpPackages", json, function(data) {
-            if(json.operation == "new" && $.isArray(data)) {
+            if(json.operation == "new" && typeof(data) == "object") {
                 var pkgjson = {
-                    id: data[1],
+                    id: data.insertId,
                     name: json.name,
                     backend: json.backend,
                     description: json.desc,
@@ -449,19 +526,18 @@ $(document).ready(function() {
                     custom: customFields,
                     additional: {
                         types: {
-                            //
+                            // Added below
                         }
-                    },
+                    }
                 };
-                // TODO: This eventually needs to taken from data because
-                // it can be changed by the validation process
-                pkgjson.additional.types[json.type] = typeFields;
+                // Types can modify field values during the validation process
+                pkgjson.additional.types[json.type] = data.typeFields === false ? {} : data.typeFields;
                 populatePackage(pkgjson, "#packagebox-" + id);
                 rebindEvents();
                 $("#packagebox-" + id).slideUp(function() {
                     $(this).remove();
                 });
-                $("#hiddenFieldBox-" + data[1]).slideDown();
+                $("#hiddenFieldBox-" + data.insertId).slideDown();
             }
             else if(data === true) {
                 $($this).prop("disabled", false).html("Saved!");
@@ -495,7 +571,7 @@ $(document).ready(function() {
             var json = {
                 operation: "order",
                 order: order
-            }
+            };
             json[csrfMagicName] = csrfMagicToken;
             $.post("<AJAX>?function=acpPackages", json, function(data) {
                 if(data) {
@@ -509,6 +585,42 @@ $(document).ready(function() {
                 $("#atBottomDiv").slideDown();
                 stopSpin();
             });
+        });
+    });
+
+    var cssRightWidth = $("#right").width() + "px";
+    // Attempt to nab raw CSS width value
+    $.each(document.styleSheets, function(k1, stylesheet) {
+        $.each(stylesheet.rules || stylesheet.cssRules, function(k2, rule) {
+            if(rule instanceof CSSStyleRule && rule.selectorText.toLowerCase() == "#right") {
+                cssRightWidth = rule.style.getPropertyValue("width");
+            }
+        });
+    });
+
+    $("#growEditor").click(function() {
+        var $footer = $(".footer");
+        $(this).fadeOut();
+        $footer.fadeOut();
+        $("#left").fadeOut(function() {
+            $("#right").animate({
+                width: "100%"
+            });
+            $footer.fadeIn();
+            $("#shrinkEditor").fadeIn();
+        });
+    });
+
+    $("#shrinkEditor").click(function() {
+        var $footer = $(".footer");
+        $(this).fadeOut();
+        $footer.fadeOut();
+        $("#right").animate({
+            width: cssRightWidth
+        }, function() {
+            $("#left").fadeIn();
+            $footer.fadeIn();
+            $("#growEditor").fadeIn();
         });
     });
 });
@@ -572,10 +684,9 @@ $(document).ready(function() {
                 </tbody></table>
             </td>
             <td class="pkgEditorRightTd" id="pkgEditorRightTd-5id5">
+                <div style="text-align: center; font-weight: bold; font-size: 14px; font-family: Lucida Grande, sans-serif;">Custom Fields</div>
                 <table class="pkgEditorRightTable" id="pkgEditorRightTable-5id5" width="100%" border="0" cellpadding="5"><tbody style="text-align: center; font-size: 12px;">
                     <tr>
-                        <th width="33%"></th>
-                        <th width="33%" style="font-size: 14px; font-family: Lucida Grande;">Custom Fields</th>
                         <th width="33%"></th>
                     </tr>
                 </tbody></table>
@@ -587,8 +698,12 @@ $(document).ready(function() {
     </div>
     </div>
 </div>
-<a href="javascript:void(0);" id="newPackage"><strong><img src="<ICONDIR>add.png" /> New Package</strong></a>
 <div id="orderSpinnerDiv" class="hiddenStyle"><a id="orderSpinner" class="orderSpinner"></a></div>
+<div id="pkgTopActions">
+    <a href="javascript:void(0);" id="newPackage" class="topActions"><img src="<ICONDIR>add.png" />&nbsp;<span>New Package</span></a>
+    <a href="javascript:void(0);" id="growEditor" class="topActions"><img src="<ICONDIR>arrow_out.png" />&nbsp;<span>Grow Editor</span></a>
+    <a href="javascript:void(0);" id="shrinkEditor" class="topActions"><img src="<ICONDIR>arrow_in.png" />&nbsp;<span>Shrink Editor</span></a>
+</div>
 <div id="sortablePackages">
 </div>
 <div id="atBottomDiv" style="text-align: center;">
